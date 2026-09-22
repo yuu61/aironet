@@ -2,6 +2,61 @@
 
 Cisco AireOS WLC / Mobility Express を扱うための道具立て。
 
+## air-ssh — WLC の SSH 操作
+
+Python 3.10 以降と uv を使う。
+
+```console
+$ uv tool install -e .
+$ air-ssh --list
+$ air-ssh --device wlc "show sysinfo"
+$ air-ssh --device wlc "show ap summary" "show client summary"
+$ air-ssh --device wlc --cycle-wlan 1 "config wlan max-associated-clients 50 1" --save
+$ air-ssh --device wlc --save
+```
+
+接続情報は `~/.aironet/devices.json` に置く。リポジトリには入れない。
+以下の値を実際の機器に合わせて設定する。
+
+```json
+{
+  "devices": {
+    "wlc": {
+      "host": "192.0.2.1",
+      "username": "admin",
+      "password": "YOUR_PASSWORD",
+      "port": 22
+    }
+  }
+}
+```
+
+- ファイルの選択順は `--inventory PATH` → `$AIRONET_INVENTORY` → `~/.aironet/devices.json`。
+  `--list` は参照先と機器名・ホスト・ユーザー名を表示し、パスワードは表示しない。
+- 機器は `--device NAME` (短縮形 `-d`) または `$AIRONET_DEVICE` で明示する。
+  ソースコードに固定の接続先や認証情報は持たない。
+- ix-toolkit と同様、`devices` で包まない `{ "wlc": { ... } }` 形式も使える。
+  `_` で始まる項目はコメントとして無視する。ホストの別名キーは `hostname` / `address` / `ip`、
+  ユーザー名は `user` も使える。
+- パスワードは機器の `password` → `password_env` が指す環境変数 → `$WLC_PASS` の順で読む。
+  例えば `"password_env": "LAB_WLC_PASS"`。パスワードが無ければ接続前にエラーになる。
+  インベントリは本人だけが読み書きできる権限にする (POSIX では `chmod 600`)。
+- 確認プロンプトには `y`、ページ送りには Enter を自動で返し、出力を逐次表示する。
+  120 秒無出力なら次のコマンドへ進むが、終了コードは 1 になり `--save` は実行しない。
+- `--cycle-wlan ID` はその位置で WLAN を無効化し、次のサイクルの直前または最後に再有効化する。
+  例外時も、無効化を試みた WLAN の再有効化を試みる。無効化・再有効化がタイムアウトした場合は
+  次のサイクルへ進まない。`--save` はすべての再有効化が完了してから行う。
+
+開発時は `uv sync --extra dev` で依存関係を入れ、`uv run air-ssh ...` または
+`uv run python -m air_ssh ...` で実行する。以前の `src/air-ssh/wlc-ssh.py` も入口として使えるが、
+接続先は `--device` または `$AIRONET_DEVICE` で指定する。
+
+```console
+$ uv run python -m unittest
+$ uv run ruff check src/ tests/
+$ uv run ruff format --check src/ tests/
+```
+
 ## manualbook — マニュアル変換ツール
 
 cisco.com の WLC / Mobility Express のマニュアル (HTML) を取得し、章ごとの Markdown と索引

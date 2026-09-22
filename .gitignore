@@ -11,7 +11,7 @@
 /dist/
 vendor/
 
-# --- Python (src/air-ssh) ---
+# --- Python (src/air_ssh) ---
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -20,6 +20,9 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# --- 機器の資格情報 ---
+devices.json
 
 # --- エディタ・OS ---
 .DS_Store

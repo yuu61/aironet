@@ -12,7 +12,12 @@
 | `internal/infrastructure/` | HTTP、HTML の解析 (目次、DITA → Markdown)、JSON / Markdown / TSV / 画像の入出力 | Go (x/net/html) |
 | `internal/cli/` | サブコマンド、引数解析、エラーの最終表示と終了コード | Go |
 | `manifest.json` | 取得する資料の一覧 (train・book・kind・title・url) と train の説明。`build` の唯一の入力 | JSON |
-| `src/air-ssh/` | WLC への SSH 操作 (netmiko) | Python |
+| `src/air_ssh/domain/` | 機器・認証情報・コマンド・WLAN サイクルの値と規則 | Python |
+| `src/air_ssh/application/` | 機器の選択 → コマンド実行 → WLAN 復旧 → 保存の手順 | Python |
+| `src/air_ssh/infrastructure/` | devices.json の読み込みと netmiko の SSH セッション | Python |
+| `src/air_ssh/cli/` | 引数解析、エラーの最終表示と終了コード。air-ssh の入口 | Python |
+| `src/air-ssh/wlc-ssh.py` | 旧パス互換の起動点 | Python |
+| `tests/` | air-ssh の規則・認証情報解決・疑似セッションによる操作の検証 | Python |
 | `skills/` | SKILL.md 形式の skill (これから) | Markdown |
 
 ```console
@@ -21,6 +26,10 @@ $ ./manualbook.exe build                                          # 変換結果
 $ go test ./...                                                   # 規則 (manifest・索引・目次・変換) の検証
 $ go vet ./...
 $ golangci-lint run ./...                                         # ix-toolkit と同じ設定 (.golangci.yml)。0 issues を保つ
+$ uv sync --extra dev
+$ uv run python -m unittest
+$ uv run ruff check src/ tests/
+$ uv run ruff format --check src/ tests/
 ```
 
 ## 層の規則
@@ -30,6 +39,11 @@ $ golangci-lint run ./...                                         # ix-toolkit �
 `application` は `domain` と `infrastructure` を組み合わせる。`cli` は `application` だけを呼ぶ
 (`infrastructure` を直接呼ばない)。プロセス終了は `cli` に置く。原因を表示し終えた失敗は
 `application.ReportedError` で終了コードだけ伝える。
+
+Python の `src/air_ssh/` も同じ依存方向にする。`domain` はファイル・環境変数・SSH を直接読まず、
+渡された値だけを扱う。`cli` は `application` の公開 API だけを呼ぶ。
+接続情報は `--inventory` → `$AIRONET_INVENTORY` → `~/.aironet/devices.json` から読み、
+機器は `--device` / `$AIRONET_DEVICE` で明示する。
 
 ## cisco.com の取り方
 
@@ -60,6 +74,6 @@ build 中に強制している。落ちたら変換器がトピックを読み�
 
 ## リポジトリに入れないもの
 
-- 機器の資格情報。
+- 機器の資格情報とインベントリ (`~/.aironet/devices.json`)。
 - マニュアル本文・変換結果・図・取得キャッシュ (`cache/`)。Cisco の著作物で、各自の手元で取得・変換する。
 - 変換器のテストに本物の章 HTML を置かない。構造を写した断片 (`dita_test.go`) で足りる。
