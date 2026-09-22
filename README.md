@@ -123,6 +123,20 @@ manualbook fetch   資料を取得キャッシュ (cache/) に取るだけ
 manualbook md      取得キャッシュを Markdown と索引に変換するだけ
 ```
 
+## Skills
+
+| Skill | 用途 |
+|---|---|
+| [air-ssh](skills/air-ssh/SKILL.md) | 実機の状態確認、設定変更、WLAN サイクル、設定保存 |
+| [air-manual](skills/air-manual/SKILL.md) | ローカルの変換済み資料から構文・手順・制約を調べる（機器には接続しない） |
+
+Codex で使う場合は、必要な skill のディレクトリを `$CODEX_HOME/skills/`
+（未設定なら `~/.codex/skills/`）へ配置する。`air-ssh` は CLI とインベントリ、
+`air-manual` は `manualbook` で生成した資料を利用する。
+
+例: `$air-ssh で wlc の AP 一覧を確認して`、
+`$air-manual で Mobility Express 8.5 の WLAN 設定手順を調べて`。
+
 ## ライセンス
 
 MIT。変換結果 (マニュアル本文・図) の著作権は Cisco Systems, Inc. に帰属し、再配布しない。
