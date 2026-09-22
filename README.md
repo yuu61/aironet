@@ -77,8 +77,7 @@ $ air-ssh --device ap1 "show version" "show capwap client rcb"
   未知のエラー表現や設定値の誤りを網羅して検出するものではないため、変更後の設定値も確認する。
 
 開発時は `uv sync --extra dev` で依存関係を入れ、`uv run air-ssh ...` または
-`uv run python -m air_ssh ...` で実行する。以前の `src/air-ssh/wlc-ssh.py` も入口として使えるが、
-接続先は `--device` または `$AIRONET_DEVICE` で指定する。
+`uv run python -m air_ssh ...` で実行する。接続先は `--device` または `$AIRONET_DEVICE` で指定する。
 
 ```console
 $ uv run python -m unittest

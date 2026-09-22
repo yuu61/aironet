@@ -16,7 +16,6 @@
 | `src/air_ssh/application/` | 機器の選択 → コマンド実行 → WLAN 復旧 → 保存の手順 | Python |
 | `src/air_ssh/infrastructure/` | devices.json の読み込みと netmiko の SSH セッション | Python |
 | `src/air_ssh/cli/` | 引数解析、エラーの最終表示と終了コード。air-ssh の入口 | Python |
-| `src/air-ssh/wlc-ssh.py` | 旧パス互換の起動点 | Python |
 | `tests/` | air-ssh の規則・認証情報解決・疑似セッションによる操作の検証 | Python |
 | `skills/` | air-ssh 操作用・マニュアル参照用の skill | Markdown |
 
