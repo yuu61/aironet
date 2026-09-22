@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -49,7 +50,8 @@ line 2 &amp; more</code></pre>
    <tr class="li step"><td><p><b>Step 1</b></p></td><td><p class="ph cmd">Choose <span class="ph uicontrol">Wireless Settings</span>.</p>
      <ul class="ul choices"><li class="li choice"><p class="p">Option A</p></li><li class="li choice"><p class="p">Option B</p></li></ul></td></tr>
    <tr class="li step"><td><p><b>Step 2</b></p></td><td><p class="ph cmd">Click <span class="ph uicontrol">Apply</span>.</p>
-     <img src="/c/dam/en/us/td/i/300001-400000/350001-360000/354001-355000/354147.jpg" alt="Login"></td></tr>
+     <img src="/c/dam/en/us/td/i/300001-400000/350001-360000/354001-355000/354147.jpg" alt="Login">
+     <h5 class="sectiontitle tasklabel">Example:</h5><p class="p">Done.</p></td></tr>
   </tbody></table>
   <p class="p">See <a class="xref" href="manage.html#x">Managing</a> and <a class="xref" href="#wp200">this</a> and <a href="https://example.com/a">ext</a>.</p>
  </section>
@@ -59,7 +61,7 @@ line 2 &amp; more</code></pre>
  <section class="body refbody"><section class="section refsyn"><ul class="ul"><li class="li"><p class="p">Only on AP.</p></li></ul></section></section>
 </article>
 <article class="topic reference nested1" id="wp500">
- <h2 class="title topictitle2" id="ariaid-title5">show inline</h2>
+ <h2 class="title topictitle2" id="ariaid-title5">show&#160;inline</h2>
  <section class="body refbody"><section class="section refsyn"><span class="keyword kwd">show inline</span> {<var>a</var> | <var>b</var>}</section></section>
 </article>
 </div></body></html>`
@@ -139,8 +141,10 @@ func TestConvertChapterMarkdown(t *testing.T) {
 		"```\n(Cisco Controller) > config aaa auth local\nline 2 & more\n```",
 		"> **Note:** Be careful.\n>\n> Really.",
 		"## Grouped topics\n",
-		"1. Choose **Wireless Settings**.\n\n   - Option A\n   - Option B\n2. Click **Apply**.\n\n   ![Login](images/354147.jpg)",
-		"See [Managing](manage.md) and this and [ext](https://example.com/a).",
+		"1. Choose **Wireless Settings**.\n\n   - Option A\n   - Option B\n2. Click **Apply**.\n\n   ![Login](../images/354147.jpg)\n\n   **Example:**\n\n   Done.",
+		"See " + domain.LinkRef("manage", "x", "https://www.cisco.com/c/en/us/td/docs/wireless/controller/8-5/cmd-ref/b-cr85/manage.html#x", "Managing") +
+			" and " + domain.LinkRef("config_commands_a_to_i", "wp200", "https://www.cisco.com/c/en/us/td/docs/wireless/controller/8-5/cmd-ref/b-cr85/config_commands_a_to_i.html#wp200", "this") +
+			" and [ext](https://example.com/a).",
 		"## Restrictions for X\n\n- Only on AP.",
 		"## show inline\n\n**Syntax:** `show inline {a | b}`",
 	}
@@ -151,6 +155,85 @@ func TestConvertChapterMarkdown(t *testing.T) {
 	}
 	if strings.Contains(md, "related-links") || strings.Contains(md, "Step 1") {
 		t.Errorf("minitoc か Step ラベルが残っている:\n%s", md)
+	}
+	// 手順の中の見出し (Example:) は見出しとして記録しない (行番号が章と合わない)。
+	cv := convertSample(t)
+	lines := strings.Split(cv.Markdown, "\n")
+	for _, h := range cv.Headings {
+		if !strings.HasPrefix(lines[h-1], "#") {
+			t.Errorf("heading line %d is %q", h, lines[h-1])
+		}
+	}
+}
+
+// splitSample は変換結果を分割し、冊子の中へのリンクを付け替えたものをパスで引ける形にする。
+func splitSample(t *testing.T) (domain.SplitChapter, map[string]string) {
+	t.Helper()
+	cv := convertSample(t)
+	sp, err := domain.Split(domain.Chapter{File: "config_commands_a_to_i"}, cv.Text())
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := domain.ResolveLinks(sp.Parts, sp.Sections)
+	paths := make([]string, 0, len(parts))
+	byPath := map[string]string{}
+	for _, p := range parts {
+		paths = append(paths, p.Path)
+		byPath[p.Path] = p.Markdown
+	}
+	want := "config_commands_a_to_i/README.md,config_commands_a_to_i/config_aaa_auth.md,config_commands_a_to_i/adding_a_wlan.md," +
+		"config_commands_a_to_i/restrictions_for_x.md,config_commands_a_to_i/show_inline.md"
+	if got := strings.Join(paths, ","); got != want {
+		t.Errorf("parts = %s", got)
+	}
+	return sp, byPath
+}
+
+// TestConvertChapterSplit は変換結果を分割まで通し、ファイルとリンクが揃うことを見る。
+func TestConvertChapterSplit(t *testing.T) {
+	_, byPath := splitSample(t)
+	index := byPath["config_commands_a_to_i/README.md"]
+	if !strings.HasPrefix(index, "# Config Commands: a to i\n\n- [config aaa auth](config_aaa_auth.md)\n\n## Grouped topics\n\n- [Adding a WLAN](adding_a_wlan.md)\n") {
+		t.Errorf("README:\n%s", index)
+	}
+	cmd := byPath["config_commands_a_to_i/config_aaa_auth.md"]
+	if !strings.HasPrefix(cmd, "# config aaa auth\n\nTo configure") || !strings.Contains(cmd, "\n## Syntax Description\n") {
+		t.Errorf("command file:\n%s", cmd)
+	}
+	wlan := byPath["config_commands_a_to_i/adding_a_wlan.md"]
+	if !strings.Contains(wlan, "See [Managing](https://www.cisco.com/c/en/us/td/docs/wireless/controller/8-5/cmd-ref/b-cr85/manage.html#x) and [this](config_aaa_auth.md) and [ext](https://example.com/a).") {
+		t.Errorf("links:\n%s", wlan)
+	}
+	// リンクの目印が残らず、相対リンクは全部ファイルに着地する。
+	for p, md := range byPath {
+		if strings.ContainsAny(md, "\x00\x01") {
+			t.Errorf("%s: リンクの目印が残っている", p)
+		}
+		for _, m := range relLink.FindAllStringSubmatch(md, -1) {
+			if _, ok := byPath["config_commands_a_to_i/"+m[1]]; !ok && !strings.HasPrefix(m[1], "../images/") {
+				t.Errorf("%s: リンク先 %q が無い", p, m[1])
+			}
+		}
+	}
+}
+
+// relLink は Markdown の相対リンク (URL でないもの)。
+var relLink = regexp.MustCompile(`\]\(([^)h#][^)]*)\)`)
+
+// TestConvertChapterSplitIndex は分割後の索引がファイルの見出し行を指すことを見る。
+func TestConvertChapterSplitIndex(t *testing.T) {
+	sp, byPath := splitSample(t)
+	if e := sp.Entries[0]; e.File != "config_commands_a_to_i/config_aaa_auth.md" || e.Line != 1 {
+		t.Errorf("entry = %+v", e)
+	}
+	for _, sec := range sp.Sections {
+		lines := strings.Split(byPath[sec.File], "\n")
+		if sec.Line < 1 || sec.Line > len(lines) || lines[sec.Line-1] != strings.Repeat("#", sec.Level)+" "+sec.Title {
+			t.Errorf("section %q → %s:%d does not point to its heading", sec.Title, sec.File, sec.Line)
+		}
+		if sec.ID() != "config_commands_a_to_i#"+sec.Anchor {
+			t.Errorf("section ID = %q", sec.ID())
+		}
 	}
 }
 
@@ -185,10 +268,18 @@ func TestConvertEOT(t *testing.T) {
 	if strings.Join(cv.Anchors, ",") != "intro,new" {
 		t.Errorf("anchors = %v", cv.Anchors)
 	}
-	if err := domain.ValidateAnchors("rn", cv.Anchors, cv.Sections); err != nil {
+	if err = domain.ValidateAnchors("rn", cv.Anchors, cv.Sections); err != nil {
 		t.Errorf("%v\n%s", err, cv.Markdown)
 	}
 	if !strings.HasPrefix(cv.Markdown, "# Release Notes for X\n") || strings.Contains(cv.Markdown, "Contents") {
 		t.Errorf("markdown:\n%s", cv.Markdown)
+	}
+	// nested0 は資料の根なので README に残り、nested1 がファイルになる。
+	sp, err := domain.Split(domain.Chapter{File: "b_ME_RN_810"}, cv.Text())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sp.Parts) != 2 || sp.Parts[1].Path != "b_ME_RN_810/new.md" || sp.Parts[1].Markdown != "# New\n\nBody.\n" {
+		t.Errorf("parts = %+v", sp.Parts)
 	}
 }

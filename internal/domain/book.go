@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Chapter は冊子の 1 章 (= 1 HTML ページ = 1 Markdown ファイル)。
+// Chapter は冊子の 1 章 (= 1 HTML ページ = 変換結果の 1 ディレクトリ)。
 type Chapter struct {
 	File  string `json:"file"` // 拡張子を除いた basename。"config_commands_a_to_i"
 	Title string `json:"title"`
@@ -13,8 +13,11 @@ type Chapter struct {
 	URL   string `json:"url"`  // 絶対 URL
 }
 
-// MarkdownFile は章の Markdown の冊子内相対パス。
-func (c Chapter) MarkdownFile() string { return c.File + ".md" }
+// IndexFile は章の README.md (章タイトル・章直下の本文・トピックの一覧) の冊子内相対パス。
+func (c Chapter) IndexFile() string { return c.File + "/" + IndexName }
+
+// PartFile は章の中のトピックファイルの冊子内相対パス。
+func (c Chapter) PartFile(slug string) string { return c.File + "/" + slug + ".md" }
 
 // ChapterFile は章ページの URL から File を導く。
 func ChapterFile(pageURL string) string {
@@ -41,14 +44,17 @@ type Entry struct {
 
 // Section は本文の見出し (topictitle)。
 type Section struct {
-	Anchor string
-	Title  string
-	File   string // 冊子内の Markdown 相対パス
-	Source string // 元ページの URL とアンカー
-	Level  int
-	Line   int // 見出し行 (1 始まり)
+	Anchor  string
+	Title   string
+	Chapter string // 章 (Chapter.File)。ID の左側
+	File    string // 冊子内の Markdown 相対パス
+	Source  string // 元ページの URL とアンカー
+	Level   int    // 見出しレベル (ファイル内)
+	Depth   int    // トピックの入れ子の深さ。章 = 0、章直下 = 1。分割の単位になる
+	Line    int    // 見出し行 (1 始まり)
+	Group   bool   // グループ見出し (DITA の topichead)。トピックではなく並びの区切り
 }
 
 // ID は sections.tsv の section 列。Cisco の資料には節番号が無いので
-// 「章ファイル#アンカー」で位置を表す。
-func (s Section) ID() string { return strings.TrimSuffix(s.File, ".md") + "#" + s.Anchor }
+// 「章#アンカー」で位置を表す。ファイルは分割で変わるが、この ID は変わらない。
+func (s Section) ID() string { return s.Chapter + "#" + s.Anchor }

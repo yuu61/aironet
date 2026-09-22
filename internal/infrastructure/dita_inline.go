@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"net/url"
 	"path"
 	"strings"
 
@@ -143,37 +144,29 @@ func codeSpan(s string) string {
 	return "`" + s + "`"
 }
 
-// link は <a href>。同じ章の中はテキストだけ、同じ冊子の別の章は <章>.md、それ以外は絶対 URL。
+// link は <a href>。同じ冊子の中 (同じ章のアンカーも含む) は、リンク先がどのファイルに
+// 入るか分割後に決まるので domain.LinkRef の目印にし、それ以外は絶対 URL。
 func (c *converter) link(n *html.Node) string {
 	text := c.inlineChildren(n)
 	href := attr(n, "href")
 	t := strings.TrimSpace(text)
-	if href == "" || t == "" || strings.HasPrefix(href, "#") {
+	if href == "" || t == "" {
 		return text
 	}
 	u, err := c.base.Parse(href)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return text
 	}
-	dest, ok := c.chapterLink(u.String())
-	if !ok {
-		return text
+	if chapter, ok := c.chapterOf(u); ok {
+		return domain.LinkRef(chapter, u.Fragment, u.String(), t)
 	}
-	return "[" + t + "](" + dest + ")"
+	return "[" + t + "](" + u.String() + ")"
 }
 
-// chapterLink はリンク先。同じ冊子の別の章なら <章>.md、同じ章なら無し (ok=false)、それ以外は URL のまま。
-func (c *converter) chapterLink(abs string) (string, bool) {
-	u, err := c.base.Parse(abs)
-	if err != nil {
-		return abs, true
-	}
+// chapterOf はリンク先が同じ冊子の章 (同じディレクトリの .html) ならその Chapter.File。
+func (c *converter) chapterOf(u *url.URL) (string, bool) {
 	if u.Host != c.base.Host || path.Dir(u.Path) != path.Dir(c.base.Path) || !strings.HasSuffix(u.Path, ".html") {
-		return abs, true
-	}
-	file := domain.ChapterFile(abs)
-	if file == c.ch.File {
 		return "", false
 	}
-	return file + ".md", true
+	return domain.ChapterFile(u.Path), true
 }

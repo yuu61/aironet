@@ -94,7 +94,8 @@ func TestDefaultManualsDir(t *testing.T) {
 }
 
 func TestSectionID(t *testing.T) {
-	s := Section{File: "manage.md", Anchor: "ID307"}
+	// ファイルは分割で変わるが、ID は章とアンカーで決まる。
+	s := Section{Chapter: "manage", File: "manage/managing_wlans.md", Anchor: "ID307"}
 	if got := s.ID(); got != "manage#ID307" {
 		t.Errorf("ID = %q", got)
 	}

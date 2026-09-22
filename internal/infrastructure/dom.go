@@ -85,9 +85,11 @@ func firstChildElem(n *html.Node, name string) *html.Node {
 	return nil
 }
 
-var spaces = regexp.MustCompile(`[ \t\r\n\f]+`)
+// spaces は HTML の空白。&nbsp; (U+00A0) も含める。見出しに紛れると索引 (strings.Fields で畳む) と
+// 本文の見出し行が食い違い、grep で引けなくなる。
+var spaces = regexp.MustCompile(`[ \t\r\n\f\x{00A0}]+`)
 
-// collapse は HTML の空白 (改行を含む) を 1 つの空白に畳む。前後は残す。
+// collapse は HTML の空白 (改行・&nbsp; を含む) を 1 つの空白に畳む。前後は残す。
 func collapse(s string) string { return spaces.ReplaceAllString(s, " ") }
 
 // textOf は子孫のテキストを (タグを外して) 連結し、空白を畳んで前後を落とす。

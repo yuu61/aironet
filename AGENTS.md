@@ -7,7 +7,7 @@
 | ディレクトリ | 中身 | 言語 |
 |---|---|---|
 | `cmd/manualbook/` | manualbook の起動点 | Go |
-| `internal/domain/` | 資料・トレイン・章・索引の値と規則 (manifest の検証、索引のキー、出力先、章内目次との突き合わせ) | Go |
+| `internal/domain/` | 資料・トレイン・章・索引の値と規則 (manifest の検証、索引のキー、出力先、章内目次との突き合わせ、章のトピック分割とリンクの付け替え) | Go |
 | `internal/application/` | manifest から取得 → 変換 → 索引まで進める実行手順 | Go |
 | `internal/infrastructure/` | HTTP、HTML の解析 (目次、DITA → Markdown)、JSON / Markdown / TSV / 画像の入出力 | Go (x/net/html) |
 | `internal/cli/` | サブコマンド、引数解析、エラーの最終表示と終了コード | Go |
@@ -58,19 +58,35 @@ Python の `src/air_ssh/` も同じ依存方向にする。`domain` はファイ
 
 `<manuals>/<train>/<book>/` (`$AIRONET_MANUALS` → `~/.aironet/manuals/`) に
 
-- `<章>.md` — 章ごとの本文。図は `images/` への相対リンク
+- `<章>/<トピック>.md` — 本文。章 (元の 1 ページ) をディレクトリにし、章直下のトピック (コマンド 1 つ、
+  設定ガイドの 1 機能) を 1 ファイルにする。`domain.MaxPartBytes` (32 KB) を超えるトピックは子トピックを
+  さらに別ファイルにし、元のファイルには子への一覧リンクを残す (再帰)。ファイル名は見出しから
+  `domain.TopicSlug` で作り (`config aaa auth` → `config_aaa_auth.md`)、同じ章で重複したら `_2`, `_3` …。
+  ファイルの先頭見出しは `#` になるようレベルを引き下げる。図は `../images/` への相対リンク
+- `<章>/README.md` — 章タイトル、章直下の本文、トピックの一覧 (グループ見出しは小見出し)
 - `commands.tsv` — `command / entry / file / line / source`。コマンドの見出し。コマンドとみなすのは
   reference トピックのうち構文 `section.refsyn` が「構文ブロック `p.synblk` を持つ」か「インラインだけで
   組まれている」もの (`hasCommandSyntax`)。設定ガイドの「Restrictions for …」も refsyn を使うが箇条書き
   なので除く。この条件を緩めると設定ガイドの制約項目がコマンドとして混ざる
-- `sections.tsv` — `section / title / file / line / source`。全 topictitle 見出し。`section` は「章ファイル#アンカー」
+- `sections.tsv` — `section / title / file / line / source`。全 topictitle 見出し。`section` は「章#アンカー」で、
+  ファイルの分け方に依らない
 - `README.md` — 出典、取得日、トレインと最終機種、章の一覧
 
-`line` は本文の見出し行 (1 始まり)。この形は ix-toolkit の `ix-manual` skill と同じで、
+`file` はトピックのファイル、`line` はその中の見出し行 (1 始まり)。1 ファイルを丸ごと読んで足りる大きさ
+なので、読む側は grep や部分読みに頼らなくてよい。この形は ix-toolkit の `ix-manual` skill と同じ列で、
 skill 側はこの契約を前提に読む。片方を変えたらもう片方も直す。
+
+分割は `domain.Split` が変換後の Markdown に対して行う。変換器 (`infrastructure.ConvertChapter`) は章 1 本を
+1 つの Markdown に書き、見出しごとにトピックの入れ子の深さ (`Section.Depth`、cisco.com の `nestedN` クラス)
+と行番号を記録する。分割はその記録だけで範囲を決め、本文を解釈しない。冊子の中へのリンクは分割先が
+決まるまで `domain.LinkRef` の目印にし、全章を分けてから `domain.ResolveLinks` で相対パスにする。
+書き出しは冊子の置き場 `<manuals>/<train>/<book>/` を丸ごと消してから行う (`ResetBookDir`。前回の構成が
+残らないように)。README.md の無い非空ディレクトリだけは消さずに止めるが、それ以上の保護は無いので、
+`-manuals` / `$AIRONET_MANUALS` に他の物が入ったディレクトリを指さない。
 
 章内目次 (`div#chapterToc`、1 ページ資料は Contents) の全アンカーが変換結果の見出しに現れることを
 build 中に強制している。落ちたら変換器がトピックを読み飛ばしているので、検証を緩めずに変換器を直す。
+分割も、記録された見出し行が本文の見出しを指していなければ止める (`Split` のエラー)。
 
 ## リポジトリに入れないもの
 

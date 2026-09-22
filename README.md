@@ -59,8 +59,8 @@ $ uv run ruff format --check src/ tests/
 
 ## manualbook — マニュアル変換ツール
 
-cisco.com の WLC / Mobility Express のマニュアル (HTML) を取得し、章ごとの Markdown と索引
-(`commands.tsv` / `sections.tsv`) に変換する Go 製のツール。
+cisco.com の WLC / Mobility Express のマニュアル (HTML) を取得し、章ごとのディレクトリに
+トピック単位の Markdown と索引 (`commands.tsv` / `sections.tsv`) を作る Go 製のツール。
 
 ```console
 $ go build -ldflags="-s -w" -o manualbook.exe ./cmd/manualbook
@@ -71,6 +71,7 @@ $ ./manualbook.exe build
   (`$AIRONET_MANUALS` があればそこ)。
 - 2 回目以降は取得済みの資料を取りに行かず、変換だけになる。取り直すときは `-force`。
 - 1 冊だけなら `-only 8-10/cr` のように指定する。
+- 変換のたびに冊子の置き場 (`<manuals>/<train>/<book>/`) を消して書き直す。
 
 ### 対象
 
@@ -91,22 +92,29 @@ $ ./manualbook.exe build
 `8-5` は Cisco 2504 WLC (と 5508 / 7510 / WiSM2 / 8510) の最終トレイン、`8-10` は
 3504 / 5520 / 8540 / vWLC / Mobility Express の最終トレイン (AireOS の最終)。
 Mobility Express 8.5 には独立したコマンドリファレンスが無く、CLI は User Guide の
-「Controller CLI Commands」章 (`8-5/me-ug/ctrlr_cli.md`) に手順として書かれている。
+「Controller CLI Commands」章 (`8-5/me-ug/ctrlr_cli/`) に手順として書かれている。
 コマンド項目ではないので `commands.tsv` には載らず、`sections.tsv` の `ctrlr_cli#…` から引く。
 
 ### 変換結果の構成
 
 ```
 ~/.aironet/manuals/8-10/cr/
-  README.md                  出典・取得日・トレイン・最終機種・章の一覧
-  config_commands_a_to_i.md  章ごとの本文
+  README.md                          出典・取得日・トレイン・最終機種・章の一覧
+  config_commands_a_to_i/            章 (元の 1 ページ) ごとのディレクトリ
+    README.md                        章タイトル・章直下の本文・トピックの一覧
+    config_aaa_auth.md               トピック (コマンド 1 つ・1 機能) ごとの本文
+    config_aaa_auth_mgmt.md
+    …
   …
-  images/                    本文の図
-  commands.tsv               command / entry / file / line / source
-  sections.tsv               section / title / file / line / source
+  images/                            本文の図 (本文からは ../images/ で参照)
+  commands.tsv                       command / entry / file / line / source
+  sections.tsv                       section / title / file / line / source
 ```
 
-`file` と `line` で見出し行を直接指すので、章のファイルを丸ごと開かずにそこから数十行だけ読めばよい。
+章 1 本は数百 KB になり grep や部分読みでは取りこぼすので、章直下のトピックを 1 ファイルにする。
+32 KB を超えるトピックは子トピックをさらに別ファイルにし、元のファイルに一覧リンクを残す。
+`commands.tsv` / `sections.tsv` の `file` はそのトピックのファイル、`line` はその中の見出し行。
+ファイル名は見出しから作る (`config aaa auth` → `config_aaa_auth.md`) ので、`ls` でも見つかる。
 
 ### 個別実行
 

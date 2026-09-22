@@ -22,7 +22,10 @@ import (
 // (refsyn = 構文、command_default、usage_guidelines …) が本文の構造をそのまま表すので、
 // 汎用の HTML→Markdown 変換ではなく、この構造に沿って Markdown を組む。
 //
-// 見出しの行番号を記録しながら書き、索引 (commands.tsv / sections.tsv) はその行を指す。
+// 見出しの行番号を記録しながら章 1 本を 1 つの Markdown に書く。トピックごとのファイルへの
+// 分割はここでは行わず、domain.Split が Sections の Depth と Line を見て後から分ける
+// (見出しレベルもそこで付け直す)。索引 (commands.tsv / sections.tsv) は分割後の行を指す。
+// 冊子の中へのリンクは分割先が決まるまで domain.LinkRef の目印にしておく。
 // 表・注記・手順は dita_table.go、インラインは dita_inline.go。
 
 // Converted は章 1 本の変換結果。
@@ -31,8 +34,14 @@ type Converted struct {
 	Markdown string
 	Entries  []domain.Entry
 	Sections []domain.Section
+	Headings []int    // 全見出し行 (1 始まり)。分割時にレベルを付け直す対象
 	Anchors  []string // 章内目次に載る全アンカー。取りこぼしの検証に使う
 	Warnings []string
+}
+
+// Text は分割に渡す形。
+func (cv Converted) Text() domain.ChapterText {
+	return domain.ChapterText{Markdown: cv.Markdown, Headings: cv.Headings, Sections: cv.Sections, Entries: cv.Entries}
 }
 
 // ConvertChapter は章ページを Markdown にする。images は本文の画像 URL → images/ 内のファイル名。
@@ -158,14 +167,16 @@ type converter struct {
 	out    strings.Builder
 	line   int  // 次に書く行の番号 (1 始まり)
 	depth  int  // 直近の topictitle のレベル。sectiontitle はその 1 つ下になる
+	nest   int  // 直近の article の入れ子の深さ (章 = 0、章直下 = 1)。分割の単位
 	inRef  bool // 直近の article がコマンド (reference かつ構文あり) で、見出しをまだ記録していない
 	inCell bool // 表のセルの中 (コードブロックを使えない)
+	nested bool // リスト項目やセルの中身を組む子 converter。行番号が章と合わないので見出しを記録しない
 }
 
-// sub はリスト項目やセルの中身を別に組むための子 converter。見出しは親に記録しない
-// (これらの中に見出しは来ない)。
+// sub はリスト項目やセルの中身を別に組むための子 converter。手順の「Example:」のような
+// 見出しがここに来ることがあるが、行番号が章のものと合わないので見出しとしては扱わない。
 func (c *converter) sub() *converter {
-	return &converter{ch: c.ch, base: c.base, images: c.images, res: c.res, depth: c.depth, anchor: c.anchor, inCell: c.inCell, line: 1}
+	return &converter{ch: c.ch, base: c.base, images: c.images, res: c.res, depth: c.depth, anchor: c.anchor, inCell: c.inCell, line: 1, nested: true}
 }
 
 func (c *converter) write(s string) {
@@ -344,13 +355,29 @@ func isMinitoc(ul *html.Node) bool {
 
 // topic は <article class="topic …">。id がアンカー、reference かつ構文ありならコマンド。
 func (c *converter) topic(x *html.Node) {
-	prevAnchor, prevRef, prevDepth := c.anchor, c.inRef, c.depth
+	prevAnchor, prevRef, prevDepth, prevNest := c.anchor, c.inRef, c.depth, c.nest
 	if id := attr(x, "id"); id != "" {
 		c.anchor = id
 	}
+	c.nest = topicNest(x, c.nest)
 	c.inRef = hasClass(x, "reference") && hasCommandSyntax(x)
 	c.children(x)
-	c.anchor, c.inRef, c.depth = prevAnchor, prevRef, prevDepth
+	c.anchor, c.inRef, c.depth, c.nest = prevAnchor, prevRef, prevDepth, prevNest
+}
+
+// topicNest はトピックの入れ子の深さ。cisco.com は nestedN のクラスで付けている
+// (章直下 = nested1、1 ページ資料の根 = nested0)。無ければ親の 1 つ下、トピックでない
+// article (1 ページ資料の外枠) はそのまま。
+func topicNest(x *html.Node, parent int) int {
+	if cls, ok := hasClassPrefix(x, "nested"); ok {
+		if n, err := strconv.Atoi(strings.TrimPrefix(cls, "nested")); err == nil {
+			return n
+		}
+	}
+	if !hasClass(x, "topic") && !isLegacyTopic(x) {
+		return parent
+	}
+	return parent + 1
 }
 
 // hasCommandSyntax は article 直下の本文にコマンド構文 (section.refsyn) があるか。入れ子の article は見ない。
@@ -416,10 +443,16 @@ func (c *converter) heading(x *html.Node) {
 	if title == "" {
 		return
 	}
+	if c.nested {
+		// リスト項目やセルの中の見出し (手順の「Example:」など)。Markdown の見出しにはできないので太字にする。
+		c.block("**" + title + "**")
+		return
+	}
 	k := c.classify(x)
 	c.blank()
 	line := c.line
 	c.write(strings.Repeat("#", k.level) + " " + title + "\n")
+	c.res.Headings = append(c.res.Headings, line)
 	if !k.topic {
 		return
 	}
@@ -438,14 +471,16 @@ func (c *converter) record(k headingKind, title, anchor string, line int) {
 	if anchor != "" {
 		src += "#" + anchor
 	}
+	// File と Line は章 1 本の Markdown 上の位置。分割 (domain.Split) が付け替える。
 	c.res.Sections = append(c.res.Sections, domain.Section{
-		Anchor: anchor, Title: title, Level: k.level, File: c.ch.MarkdownFile(), Line: line, Source: src,
+		Anchor: anchor, Title: title, Chapter: c.ch.File, Level: k.level, Depth: c.nest, Group: k.group,
+		File: c.ch.IndexFile(), Line: line, Source: src,
 	})
 	if c.inRef && !k.group {
 		c.inRef = false
 		c.res.Entries = append(c.res.Entries, domain.Entry{
 			Command: domain.NormalizeCommand(title), Title: title, Anchor: anchor,
-			File: c.ch.MarkdownFile(), Line: line, Source: src,
+			File: c.ch.IndexFile(), Line: line, Source: src,
 		})
 	}
 }
@@ -541,7 +576,8 @@ func (c *converter) dl(x *html.Node) {
 	}
 }
 
-// image は本文の図。取得済みなら images/ への相対リンク、無ければ元 URL のまま。
+// image は本文の図。取得済みなら冊子の images/ への相対リンク (本文は <章>/ の下に
+// 置かれるので ../images/)、無ければ元 URL のまま。
 func (c *converter) image(x *html.Node) string {
 	u := resolveImage(c.base, attr(x, "src"))
 	if u == "" {
@@ -549,7 +585,7 @@ func (c *converter) image(x *html.Node) string {
 	}
 	alt := strings.ReplaceAll(collapse(attr(x, "alt")), "]", "")
 	if name, ok := c.images[u]; ok {
-		return "![" + alt + "](images/" + name + ")"
+		return "![" + alt + "](../images/" + name + ")"
 	}
 	c.warnf("画像を取得していない: %s", u)
 	return "![" + alt + "](" + u + ")"

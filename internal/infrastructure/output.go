@@ -1,24 +1,57 @@
 package infrastructure
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/yuu61/aironet/internal/domain"
 )
 
-// 変換結果の書き出し。章の Markdown、索引 (commands.tsv / sections.tsv)、README、図。
+// 変換結果の書き出し。章ごとのディレクトリとトピックの Markdown、索引 (commands.tsv /
+// sections.tsv)、README、図。
 //
-// 索引の列は ix-toolkit の ix-manual が読む形と同じにしてある。読む側は 1 章の
-// ファイルを丸ごと開かず、file と line で見出し行に飛んでそこから数十行だけ読む。
+// 索引の列は ix-toolkit の ix-manual が読む形と同じにしてある。読む側は file のファイルを
+// 開き、line の見出し行から読む。トピック 1 つが 1 ファイルなので丸ごと読んでも足りる。
 
-// WriteChapter は章の Markdown を書く。
-func WriteChapter(bookDir string, ch domain.Chapter, markdown string) error {
-	return os.WriteFile(filepath.Join(bookDir, ch.MarkdownFile()), []byte(markdown), 0o644)
+// ResetBookDir は冊子の置き場を空にする。章やトピックの構成が変わったとき、前回の変換結果が
+// 残って重複しないようにする。生成物の目印 (README.md) が無い非空のディレクトリは変換結果では
+// ないので消さずに止める。
+func ResetBookDir(bookDir string) error {
+	entries, err := os.ReadDir(bookDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return os.MkdirAll(bookDir, 0o755)
+	}
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 && !slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == "README.md" }) {
+		return fmt.Errorf("%s: 変換結果ではないファイルがある (README.md が無い)。消さずに止める。別の置き場を -manuals で指定する", bookDir)
+	}
+	if err := os.RemoveAll(bookDir); err != nil {
+		return err
+	}
+	return os.MkdirAll(bookDir, 0o755)
+}
+
+// WriteParts は分割済みの Markdown を <章>/ の下に書く。
+func WriteParts(bookDir string, parts []domain.Part) error {
+	for _, p := range parts {
+		dst := filepath.Join(bookDir, filepath.FromSlash(p.Path))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, []byte(p.Markdown), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // WriteIndexes は commands.tsv と sections.tsv を書く。
@@ -89,6 +122,7 @@ type ReadmeInfo struct {
 	Cache     BookCache
 	Doc       domain.Doc
 	Train     domain.Train
+	NParts    int
 	NEntries  int
 	NSections int
 }
@@ -120,19 +154,23 @@ func writeOrigin(b *strings.Builder, info ReadmeInfo) {
 	if info.Train.Note != "" {
 		fmt.Fprintf(b, "- 補足: %s\n", info.Train.Note)
 	}
-	fmt.Fprintf(b, "- 章数: %d / 見出し数: %d / コマンド項目数: %d\n", len(info.Cache.Chapters), info.NSections, info.NEntries)
+	fmt.Fprintf(b, "- 章数: %d / ファイル数: %d / 見出し数: %d / コマンド項目数: %d\n", len(info.Cache.Chapters), info.NParts, info.NSections, info.NEntries)
 	b.WriteString("- 変換経路: cisco.com の章ページ (DITA 由来の HTML) をトピックと section の構造どおりに読んだもの (表は Markdown の表、図は images/ に取得)\n")
 }
 
 func writeUsage(b *strings.Builder, info ReadmeInfo) {
 	b.WriteString("\n## 引き方\n\n")
+	b.WriteString("- `<章>/<トピック>.md` — 本文。章 (元の 1 ページ) をディレクトリにし、章直下のトピック (コマンド 1 つ、\n")
+	fmt.Fprintf(b, "  1 機能) を 1 ファイルにしてある。%d KB を超えるトピックは子トピックをさらに別ファイルにし、元のファイルに一覧リンクを残す。\n", domain.MaxPartBytes/1024)
+	b.WriteString("  ファイル名は見出しから作る (`config aaa auth` → `config_aaa_auth.md`)。1 ファイルを丸ごと読んで足りる大きさにしてある。\n")
+	b.WriteString("- `<章>/README.md` — 章タイトル、章直下の本文、章のトピック一覧。\n")
 	if info.NEntries > 0 {
 		b.WriteString("- `commands.tsv` — `command / entry / file / line / source` のタブ区切り索引。コマンド名から引く。\n")
-		b.WriteString("  `line` は本文ファイル中の見出し行 (1 始まり)。そこから数十行読めば 1 項目に足りる。\n")
+		b.WriteString("  `file` はそのコマンドのファイル、`line` はその中の見出し行 (1 始まり)。\n")
 	}
 	b.WriteString("- `sections.tsv` — `section / title / file / line / source` のタブ区切り索引。見出し語から引く。\n")
-	b.WriteString("  `section` は「章ファイル#アンカー」。`source` は元ページの URL とアンカーで、ブラウザでそのまま開ける。\n")
-	b.WriteString("- `<章>.md` — 本文。図は `images/` への相対リンク。\n")
+	b.WriteString("  `section` は「章#アンカー」(ファイルの分け方に依らない位置)。`source` は元ページの URL とアンカーで、ブラウザでそのまま開ける。\n")
+	b.WriteString("- 図は `images/` にあり、本文からは `../images/` で参照する。\n")
 }
 
 // writeChapterList は章の一覧。入れ子の目次から来たパート名は小見出しにする。
@@ -147,6 +185,6 @@ func writeChapterList(b *strings.Builder, chapters []domain.Chapter) {
 			b.WriteString("\n")
 		}
 		part = ch.Part
-		fmt.Fprintf(b, "- [%s](%s)\n", ch.Title, ch.MarkdownFile())
+		fmt.Fprintf(b, "- [%s](%s)\n", ch.Title, ch.IndexFile())
 	}
 }
