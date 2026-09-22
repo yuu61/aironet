@@ -1,0 +1,28 @@
+# --- 取得キャッシュ・変換結果 (Cisco の著作物を含むためコミットしない) ---
+/cache/
+/out/
+
+# --- Go ---
+*.exe
+*.exe~
+*.test
+*.out
+/bin/
+/dist/
+vendor/
+
+# --- Python (src/air-ssh) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.venv/
+venv/
+
+# --- エディタ・OS ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

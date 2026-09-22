@@ -1,0 +1,102 @@
+{
+  "_comment": [
+    "取得する資料の一覧。manualbook build はこれだけを読んで、取得 → 変換 → 索引まで作る。",
+    "url は Documentation Roadmap (doc-roadmap-release-85.html / -810.html) を見て人が転記する (推測して書かないこと)。",
+    "kind: book = 目次ページ (ul#bookToc) から章を辿る冊子、page = 1 ページで完結する資料 (リリースノート)。",
+    "train は変換結果の第 1 階層 (<manuals>/<train>/<book>/)。8-5 は 2504 の最終トレイン、8-10 は 3504/5520/8540/vWLC の最終トレイン。",
+    "platforms はそのトレインが最終リリースとなる機種 (各トレインの最終 MR のリリースノートの Supported Platforms で確認)。"
+  ],
+  "trains": [
+    {
+      "id": "8-5",
+      "title": "Cisco Wireless Release 8.5",
+      "platforms": ["Cisco 2504 WLC", "Cisco 5508 WLC", "Cisco Flex 7510 WLC", "Cisco WiSM2", "Cisco 8510 WLC"],
+      "note": "8.5 の対応 WLC は 2504 / 3504 / 5508 / 5520 / Flex 7510 / WiSM2 / 8510 / 8540 / vWLC。このうち 2504 などは 8.6 以降に上がれず 8.5 が最終。3504 / 5520 / 8540 / vWLC は 8.10 の冊子も参照する。Mobility Express 8.5 には独立したコマンドリファレンスが無く、CLI は User Guide の「Controller CLI Commands」章 (me-ug の ctrlr_cli.md) に手順として書かれている。コマンド項目ではないので commands.tsv には載らず、sections.tsv の ctrlr_cli#… から引く。"
+    },
+    {
+      "id": "8-10",
+      "title": "Cisco Wireless Release 8.10",
+      "platforms": ["Cisco 3504 WLC", "Cisco 5520 WLC", "Cisco 8540 WLC", "Cisco Virtual WLC (vWLC)", "Cisco Mobility Express"],
+      "note": "8.10 は AireOS の最終トレイン。対応 WLC は 3504 / 5520 / 8540 / vWLC のみで、2504 は含まれない。"
+    }
+  ],
+  "docs": [
+    {
+      "train": "8-5",
+      "book": "cr",
+      "kind": "book",
+      "title": "Cisco Wireless Controller Command Reference, Release 8.5",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/controller/8-5/cmd-ref/b-cr85.html"
+    },
+    {
+      "train": "8-5",
+      "book": "cg",
+      "kind": "book",
+      "title": "Cisco Wireless Controller Configuration Guide, Release 8.5",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/controller/8-5/config-guide/b_cg85.html"
+    },
+    {
+      "train": "8-5",
+      "book": "me-ug",
+      "kind": "book",
+      "title": "Cisco Mobility Express User Guide, Cisco Wireless Release 8.5",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/access_point/mob_exp/85/user_guide/b_ME_User_Guide_85.html"
+    },
+    {
+      "train": "8-5",
+      "book": "me-dg",
+      "kind": "book",
+      "title": "Cisco Mobility Express Deployment Guide, Release 8.5",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/controller/technotes/8-5/b_cisco_mobility_express_8_5.html"
+    },
+    {
+      "train": "8-5",
+      "book": "me-rn",
+      "kind": "page",
+      "title": "Release Notes for Cisco Mobility Express, Cisco Wireless Release 8.5",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/access_point/mob_exp/85/release_notes/b_ME_RN_85.html"
+    },
+    {
+      "train": "8-10",
+      "book": "cr",
+      "kind": "book",
+      "title": "Cisco Wireless Controller Command Reference, Release 8.10",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/controller/8-10/cmd-ref/b-cr810.html"
+    },
+    {
+      "train": "8-10",
+      "book": "cg",
+      "kind": "book",
+      "title": "Cisco Wireless Controller Configuration Guide, Release 8.10",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/controller/8-10/config-guide/b_cg810.html"
+    },
+    {
+      "train": "8-10",
+      "book": "ap-cr",
+      "kind": "book",
+      "title": "Cisco Aironet Wave 2 and Catalyst Wi-Fi6 Access Point Command Reference, Release 8.10",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/access_point/wave2-ap/command-reference/8-10/b-cisco-wave2-ap-cr-810.html"
+    },
+    {
+      "train": "8-10",
+      "book": "me-ug",
+      "kind": "book",
+      "title": "Cisco Mobility Express User Guide, Cisco Wireless Release 8.10",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/access_point/mob_exp/810/user_guide/b_ME_User_Guide_810.html"
+    },
+    {
+      "train": "8-10",
+      "book": "me-cr",
+      "kind": "book",
+      "title": "Cisco Mobility Express Command Reference, Cisco Wireless Release 8.10",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/access_point/mob_exp/810/cmd_ref/me_cr_book-810.html"
+    },
+    {
+      "train": "8-10",
+      "book": "me-rn",
+      "kind": "page",
+      "title": "Release Notes for Cisco Mobility Express, Cisco Wireless Release 8.10",
+      "url": "https://www.cisco.com/c/en/us/td/docs/wireless/access_point/mob_exp/810/release_notes/b_ME_RN_810.html"
+    }
+  ]
+}

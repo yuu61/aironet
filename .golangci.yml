@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: all
+  disable:
+    # 未使用ライブラリ・技術に関連するリンター
+    - arangolint
+    - ginkgolinter
+    - loggercheck
+    - protogetter
+    - spancheck
+    - unqueryvet
+    - zerologlint
+    - rowserrcheck
+    - sqlclosecheck
+    - gosmopolitan
+    
+    # プロジェクトの性質（小規模CLI、画像処理など）に合わないもの
+    - exhaustruct          # deprecated (replaced by exhaustruct_v5)
+    - exhaustruct_v5       # 構造体の全フィールド初期化強制は冗長
+    - varnamelen           # 短い変数名 (x, y等) を許容する
+    - ireturn              # interface返却を許容
+    - wrapcheck            # 内部エラーのラップ強制は小規模では過剰
+    - err113               # sentinel errorの強制は過剰
+    - testpackage          # 別パッケージでのテストを強制しない
+    - paralleltest         # 今回のテストの性質上必須としない
+    - tparallel
+    - thelper
+    
+    # フォーマッタに任せる、またはスタイルとして過剰なもの
+    - lll                  # 行長制限はフォーマッタに任せる
+    - wsl                  # deprecated (replaced by wsl_v5)
+    - wsl_v5               # 空行のスタイル制限は過剰
+    - gomodguard           # deprecated (replaced by gomodguard_v2)
+    - gomodguard_v2        # モジュールの許可・禁止リストは持たない (depguard と同じ理由)
+    - nlreturn
+    - tagalign
+    - tagliatelle
+    - godot                # コメント末尾のピリオド強制（日本語に合わない）
+    - godox                # TODO/FIXMEコメントは許容
+    - forbidigo
+    - grouper
+    - decorder
+    - funcorder
+    - inamedparam
+    - interfacebloat
+    - nonamedreturns
+    - noinlineerr
+    - embeddedstructfieldcheck
+    - exhaustive
+    - mnd                  # 画像処理の定数などで引っかかりやすいため無効化
+    - depguard
+    - gomoddirectives
+
+  # default: all を使うことで、これら以外の有益なリンター (intrange, prealloc, perfsprint, modernize, fieldalignment など) はすべて有効になります。
+
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+        - opinionated
+      disabled-checks:
+        - hugeParam
+        - unnamedResult
+    revive:
+      rules:
+        - name: blank-imports
+        - name: exported
+          disabled: true
+        - name: unexported-return
+          disabled: true
+        - name: cognitive-complexity
+          disabled: true
+    gosec:
+      excludes:
+        - G104
+        - G301
+        - G304
+        - G306                # 資格情報を含まないマニュアル・索引・キャッシュを他の利用者も読める 0644 で出力する
+        - G703                # 利用者が指定したローカル資料のパスを読む CLI
+        - G115
+    govet:
+      enable-all: true
+    nestif:
+      min-complexity: 8
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      extra:
+        group-params: true
+    goimports:
+      local-prefixes:
+        - github.com/yuu61/aironet
