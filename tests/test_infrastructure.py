@@ -98,9 +98,60 @@ class SessionTests(unittest.TestCase):
     @patch("air_ssh.infrastructure.session.time.sleep")
     def test_silent_channel_times_out(self, sleep):
         err = io.StringIO()
-        with patch("air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 121]):
-            self.assertFalse(NetmikoSession(Channel([]), io.StringIO(), err).run("show sysinfo"))
+        channel = Channel([])
+        # 0/121: the command's inactivity; 121/132: the recovery's own inactivity.
+        with patch("air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 121, 121, 132]):
+            self.assertFalse(NetmikoSession(channel, io.StringIO(), err).run("show sysinfo"))
+        self.assertEqual(channel.writes, ["show sysinfo\n", "\x1a"])
         self.assertIn("no output for 120s", err.getvalue())
+        self.assertIn("prompt not recovered", err.getvalue())
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_timeout_recovers_prompt_with_ctrl_z(self, sleep):
+        # An unrecognized question times out; Ctrl-Z brings the root prompt back, so a
+        # later status read (WLAN restoration) still works while the command itself failed.
+        channel = Channel(
+            [
+                "Do something odd? [yes/no]",
+                "",
+                "\n(Cisco Controller) >",
+                "",
+                "",
+                "show wlan 1\nWLAN Identifier.................. 1\nStatus........ Disabled\n",
+                "(Cisco Controller) >",
+                "",
+                "",
+            ]
+        )
+        err = io.StringIO()
+        session = NetmikoSession(channel, io.StringIO(), err)
+        with patch(
+            "air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 0, 121, 121, 121]
+        ):
+            self.assertFalse(session.run("config odd"))
+        self.assertIn("prompt recovered", err.getvalue())
+        self.assertFalse(session.wlan_enabled("1"))
+        self.assertEqual(channel.writes, ["config odd\n", "\x1a", "show wlan 1\n"])
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_timeout_at_unrecognized_more_pause_quits_with_q(self, sleep):
+        # Documented: debug output can be appended to the MORE line; q exits MORE.
+        channel = Channel(
+            [
+                "page 1\n--More-- or (q)uit In slWlcProcessSLStatsClearMs",
+                "",
+                "\n(Cisco Controller) >",
+                "",
+                "",
+            ]
+        )
+        session = NetmikoSession(channel, io.StringIO(), io.StringIO())
+        with patch(
+            "air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 0, 121, 121, 121]
+        ):
+            self.assertFalse(session.run("show run-config"))
+        self.assertEqual(channel.writes, ["show run-config\n", "q"])
+        self.assertTrue(session._ready)
 
     @patch("netmiko.ConnectHandler")
     def test_connection_uses_inventory_values(self, connect):
@@ -226,17 +277,19 @@ class SessionTests(unittest.TestCase):
     def test_save_without_response_does_not_send_yes(self, sleep):
         channel = Channel([])
         with (
-            patch("air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 121]),
+            patch("air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 121, 121, 132]),
             self.assertRaises(OperationError),
         ):
             NetmikoSession(channel, io.StringIO(), io.StringIO()).save()
-        self.assertEqual(channel.writes, ["save config\n"])
+        self.assertEqual(channel.writes, ["save config\n", "\x1a"])
 
     @patch("air_ssh.infrastructure.session.time.sleep")
     def test_save_success_without_final_prompt_is_not_complete(self, sleep):
         channel = Channel(["Configuration Saved!\n", ""])
         with (
-            patch("air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 1, 122]),
+            patch(
+                "air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 1, 122, 122, 133]
+            ),
             self.assertRaises(OperationError),
         ):
             NetmikoSession(channel, io.StringIO(), io.StringIO()).save()
@@ -245,11 +298,13 @@ class SessionTests(unittest.TestCase):
     def test_save_does_not_confirm_an_unrelated_question(self, sleep):
         channel = Channel(["Proceed with reset? (y/n)", ""])
         with (
-            patch("air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 1, 122]),
+            patch(
+                "air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 1, 122, 122, 133]
+            ),
             self.assertRaises(OperationError),
         ):
             NetmikoSession(channel, io.StringIO(), io.StringIO()).save()
-        self.assertEqual(channel.writes, ["save config\n"])
+        self.assertEqual(channel.writes, ["save config\n", "\x1a"])
 
     @patch("air_ssh.infrastructure.session.time.sleep")
     def test_bare_echo_of_question_does_not_trigger_reply(self, sleep):
@@ -294,11 +349,14 @@ class SessionTests(unittest.TestCase):
         conn = Mock()
         conn.read_channel.return_value = ""
         session = NetmikoSession(conn, io.StringIO(), io.StringIO())
-        with patch("air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 121]):
+        with patch("air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 121, 121, 132]):
             self.assertFalse(session.run("show sysinfo"))
         with self.assertRaisesRegex(OperationError, "reconnect"):
             session.run("config wlan enable 1")
-        conn.write_channel.assert_called_once_with("show sysinfo\n")
+        self.assertEqual(
+            [call.args for call in conn.write_channel.call_args_list],
+            [("show sysinfo\n",), ("\x1a",)],
+        )
         session.close()
         self.assertEqual(
             [call[0] for call in conn.mock_calls[-2:]], ["paramiko_cleanup", "disconnect"]
@@ -306,14 +364,100 @@ class SessionTests(unittest.TestCase):
 
     @patch("air_ssh.infrastructure.session.time.sleep")
     @patch("netmiko.ConnectHandler")
-    def test_paging_setup_failure_closes_connection(self, connect, sleep):
+    def test_paging_rejected_for_read_only_user_warns_and_continues(self, connect, sleep):
+        # config paging requires read-write privileges; a read-only user can still
+        # run show commands, and Netmiko could not have disabled paging for them either.
         connect.return_value.read_channel.side_effect = [
             "Error: Permission denied\n(Cisco Controller) >",
             "",
             "",
         ]
-        with self.assertRaises(OperationError):
+        err = io.StringIO()
+        session = open_session(
+            Target("lab", "192.0.2.1", "operator", "test-secret"), io.StringIO(), err
+        )
+        self.assertIn("refused 'config paging enable'", err.getvalue())
+        connect.return_value.disconnect.assert_not_called()
+        session.close()
+        connect.return_value.paramiko_cleanup.assert_not_called()
+        connect.return_value.disconnect.assert_called_once()
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    @patch("netmiko.ConnectHandler")
+    def test_paging_setup_timeout_closes_connection(self, connect, sleep):
+        connect.return_value.read_channel.return_value = ""
+        with (
+            patch("air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 121, 121, 132]),
+            self.assertRaises(OperationError),
+        ):
             open_session(
                 Target("lab", "192.0.2.1", "operator", "test-secret"), io.StringIO(), io.StringIO()
             )
         connect.return_value.disconnect.assert_called_once()
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_confirmation_with_warning_on_the_same_line_is_answered(self, sleep):
+        # Documented prompts: clear ap config, clear ap eventlog, config certificate,
+        # config rogue adhoc, config mesh range.
+        for question in (
+            (
+                "Clear ap-config will clear ap config and reboot the AP. "
+                "Are you sure you want continue? (y/n)"
+            ),
+            "This will clear event log contents for all APs. Do you want continue? (y/n) :",
+            "Creating a certificate may take some time. Do you wish to continue? (y/n)",
+            "Using this feature may have legal consequences. Do you want to continue? (y/n) :",
+            (
+                "Command not applicable for indoor mesh. All outdoor Mesh APs will be rebooted "
+                "Are you sure you want to start? (y/N)"
+            ),
+        ):
+            with self.subTest(question=question):
+                channel = Channel([question, "", "\n(Cisco Controller) >", "", ""])
+                self.assertTrue(
+                    NetmikoSession(channel, io.StringIO(), io.StringIO()).run("clear ap config ap1")
+                )
+                self.assertEqual(channel.writes, ["clear ap config ap1\n", "y\n"])
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_show_output_with_dotted_leaders_is_never_answered(self, sleep):
+        channel = Channel(
+            [
+                "Description.......Are you sure you want continue? (y/n)",
+                "",
+                "\n(Cisco Controller) >",
+                "",
+                "",
+            ]
+        )
+        self.assertTrue(NetmikoSession(channel, io.StringIO(), io.StringIO()).run("show wlan 1"))
+        self.assertEqual(channel.writes, ["show wlan 1\n"])
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_cannot_response_is_a_controller_error(self, sleep):
+        channel = Channel(
+            [
+                "config 802.11a exp-bwreq enable\n",
+                "Cannot change Exp Bw Req mode while 802.11a network is operational.\n",
+                "(Cisco Controller) >",
+                "",
+                "",
+            ]
+        )
+        with self.assertRaisesRegex(OperationError, "rejected"):
+            NetmikoSession(channel, io.StringIO(), io.StringIO()).run(
+                "config 802.11a exp-bwreq enable"
+            )
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_cannot_in_show_output_does_not_fail_a_status_read(self, sleep):
+        channel = Channel(
+            [
+                "show wlan 1\nWLAN Identifier.................. 1\n",
+                "Cannot be roamed to.............. Disabled\nStatus........ Enabled\n",
+                "(Cisco Controller) >",
+                "",
+                "",
+            ]
+        )
+        self.assertTrue(NetmikoSession(channel, io.StringIO(), io.StringIO()).wlan_enabled("1"))

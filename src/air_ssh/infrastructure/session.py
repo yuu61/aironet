@@ -7,7 +7,12 @@ from typing import TextIO
 
 from ..domain import OperationError, Target, UsageError
 
+# A waiting question ends its line with (y/n); the controller may put a warning
+# sentence before it on the same line ("Clear ap-config will ... reboot the AP.
+# Are you sure you want continue? (y/n)"). Dotted leaders mark show output, never
+# a question, so a line containing them is never answered.
 CONFIRM_RE = re.compile(
+    r"(?![^\r\n]*\.{3,})[^\r\n]*?"
     r"(?:Are you sure\b|Would you like\b|Do you (?:want|wish)\b|Proceed\b|Please confirm\b)"
     r"[^\r\n]*\(y/n\)\s*[:?]?",
     re.IGNORECASE,
@@ -25,8 +30,24 @@ ERROR_RE = re.compile(
     r"Unable to\b|Permission denied\b|Not authorized\b)",
     re.IGNORECASE | re.MULTILINE,
 )
+# A documented refusal of a config command ("Cannot change Exp Bw Req mode while
+# 802.11a network is operational."). Only config commands are judged by it, so a
+# show dump that happens to start a line with the word cannot fail a status read.
+CONFIG_ERROR_RE = re.compile(r"^\s*Cannot\b", re.IGNORECASE | re.MULTILINE)
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 DEFAULT_TIMEOUT = 120
+# How long the escape key may take to bring the root prompt back after an abandoned command.
+RECOVERY_TIMEOUT = 10
+# q exits MORE output; Ctrl-Z returns to the root prompt from any mode and aborts
+# a "Press Enter to continue Or <Ctl Z> to abort" pause.
+QUIT_MORE = "q"
+CTRL_Z = "\x1a"
+
+
+def waiting_line(tail: str) -> str:
+    """The last line the controller has printed, as a human would see it."""
+    clean_tail = ANSI_RE.sub("", tail).replace("\r", "\n").rstrip()
+    return clean_tail.rsplit("\n", 1)[-1].strip()
 
 
 class NetmikoSession:
@@ -67,8 +88,7 @@ class NetmikoSession:
                 continue
             # Only answer a complete waiting line, never a substring in normal output
             # or a command echo. A quiet read lets fragmented lines finish first.
-            clean_tail = ANSI_RE.sub("", tail).replace("\r", "\n").rstrip()
-            line = clean_tail.rsplit("\n", 1)[-1].strip()
+            line = waiting_line(tail)
             confirm = SAVE_CONFIRM_RE if command.strip().lower() == "save config" else CONFIRM_RE
             response = None
             is_echo = line == command.strip()
@@ -92,13 +112,49 @@ class NetmikoSession:
                     output = "\n".join(
                         row for row in output.splitlines() if row.strip() != command.strip()
                     )
-                    if ERROR_RE.search(output):
+                    is_config = command.split()[0].lower() == "config"
+                    if ERROR_RE.search(output) or (is_config and CONFIG_ERROR_RE.search(output)):
                         raise OperationError(f"controller rejected '{command}'")
                     return output
                 prompt_pending = True
             elif time.monotonic() - last_data > timeout:
                 print(f"\n[WARN] no output for {timeout}s on '{command}'", file=self._err)
+                self._recover(command, line)
                 return None
+            time.sleep(0.3)
+
+    def _recover(self, command: str, line: str) -> None:
+        """Abandon the pending command and try to get the root prompt back.
+
+        A MORE pause that MORE_RE did not recognize (debug output can be appended
+        to it) is left with q; anything else with Ctrl-Z. Regaining the prompt lets
+        a WLAN disabled earlier in the batch be restored. The abandoned command
+        stays a failure either way.
+        """
+        self._conn.write_channel(QUIT_MORE if "--more--" in line.lower() else CTRL_Z)
+        tail = ""
+        prompt_pending = False
+        last_data = time.monotonic()
+        while True:
+            chunk = self._conn.read_channel()
+            if chunk:
+                print(chunk, end="", flush=True, file=self._out)
+                tail = (tail + chunk)[-4096:]
+                last_data = time.monotonic()
+                prompt_pending = False
+                continue
+            if self._prompt.fullmatch(waiting_line(tail)):
+                if prompt_pending:
+                    self._ready = True
+                    print(file=self._out)
+                    print(f"[WARN] prompt recovered; '{command}' was abandoned", file=self._err)
+                    return
+                prompt_pending = True
+            elif time.monotonic() - last_data > RECOVERY_TIMEOUT:
+                print(
+                    "[WARN] prompt not recovered; reconnect before further commands", file=self._err
+                )
+                return
             time.sleep(0.3)
 
     def save(self) -> None:
@@ -151,8 +207,21 @@ def open_session(target: Target, out: TextIO, err: TextIO) -> NetmikoSession:
     try:
         # Netmiko disables paging during login. Cisco warns that large unpaged
         # output can terminate the session; handle MORE explicitly instead.
-        if not session.run("config paging enable"):
-            raise OperationError("could not enable CLI paging")
+        try:
+            enabled = session.run("config paging enable")
+        except OperationError:
+            # config paging needs read-write privileges. For a read-only user Netmiko's
+            # "config paging disable" was refused the same way, so paging is still on
+            # and MORE handling suffices; the warning covers the remaining case.
+            print(
+                "[WARN] controller refused 'config paging enable' (read-write privileges "
+                "required); continuing. If this account is read-write, paging is off and "
+                "a very long output may end the session.",
+                file=err,
+            )
+        else:
+            if not enabled:
+                raise OperationError("could not enable CLI paging")
     except BaseException:
         try:
             session.close()

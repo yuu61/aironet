@@ -1,6 +1,13 @@
 import unittest
 
-from air_ssh.domain import CycleWlan, UsageError, parse_inventory, resolve_target, select_entry
+from air_ssh.domain import (
+    Command,
+    CycleWlan,
+    UsageError,
+    parse_inventory,
+    resolve_target,
+    select_entry,
+)
 from air_ssh.domain.credentials import resolve_password
 
 
@@ -59,6 +66,24 @@ class InventoryTests(unittest.TestCase):
         ):
             with self.subTest(field=field, value=value), self.assertRaises(UsageError):
                 resolve_target("lab", {**valid, field: value}, {})
+
+    def test_commands_that_leave_the_root_prompt_are_rejected(self):
+        # A mode word alone opens a sub-prompt, logout/exit end the session, and
+        # config prompt changes the prompt the session waits for.
+        for text in (
+            "config",
+            " show ",
+            "SAVE",
+            "logout",
+            "exit",
+            'config prompt "lab"',
+            "Config Prompt x",
+        ):
+            with self.subTest(text=text), self.assertRaises(UsageError):
+                Command(text)
+        for text in ("show sysinfo", "save config", "config wlan enable 1", "help", "show prompt"):
+            with self.subTest(text=text):
+                self.assertEqual(Command(text).text, text)
 
     def test_wlan_id_cannot_inject_commands(self):
         for value in ("", "0", "-1", "513", "9" * 5000, "1\nsave config", "1 extra", "１"):
