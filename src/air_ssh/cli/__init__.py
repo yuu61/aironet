@@ -10,12 +10,15 @@ def parse_args(argv: list[str]) -> Request:
     parser = argparse.ArgumentParser(
         prog="air-ssh",
         usage="%(prog)s [options] [--cycle-wlan ID] [COMMAND ...]",
-        description="Cisco AireOS WLC / Mobility Express SSH helper.",
+        description="Cisco AireOS WLC / Mobility Express / Aironet AP SSH helper.",
         epilog=(
             "--cycle-wlan ID (1..512) disables a WLAN before the following commands; "
             "the next cycle or end of the batch restores and verifies its original state. "
             "Errors stop the batch; restoration is attempted if the session is usable. "
-            'Example: air-ssh -d wlc --cycle-wlan 1 "config wlan max-associated-clients 50 1"'
+            'Example: air-ssh -d wlc --cycle-wlan 1 "config wlan max-associated-clients 50 1". '
+            'An inventory entry with "kind": "ap" is a Wave 2 / Catalyst Wi-Fi 6 AP: commands '
+            "run in privileged EXEC (enable_password, default: the login password); "
+            "--cycle-wlan and --save are controller-only."
         ),
         allow_abbrev=False,
     )

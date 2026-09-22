@@ -1,13 +1,14 @@
 ---
 name: air-ssh
-description: air-ssh CLI で Cisco AireOS WLC / Mobility Express の状態確認、設定変更、WLAN の無効化・再有効化、設定保存を行う。実機の操作や障害調査の依頼に使う。マニュアルだけの調査は air-manual を使う。
+description: air-ssh CLI で Cisco AireOS WLC / Mobility Express の状態確認、設定変更、WLAN の無効化・再有効化、設定保存と、Wave 2 / Catalyst Wi-Fi 6 AP 自身の CLI の操作を行う。実機の操作や障害調査の依頼に使う。マニュアルだけの調査は air-manual を使う。
 ---
 
 # air-ssh による機器操作
 
 既存の `air-ssh` CLI を使う。独自の SSH 接続スクリプトを作らない。
-対象は AireOS WLC / Mobility Express のコントローラー CLI。
-AP 自身の CLI や IOS XE のコマンドを混ぜない。
+対象は AireOS WLC / Mobility Express のコントローラー CLI と、インベントリで
+`"kind": "ap"` とした Wave 2 / Catalyst Wi-Fi 6 AP 自身の CLI。どちらに送るかは
+機器ごとに決まり、コントローラー CLI のコマンドと AP CLI のコマンド、IOS XE のコマンドを混ぜない。
 
 ## 実行環境と対象を決める
 
@@ -22,14 +23,18 @@ air-ssh --device wlc "show sysinfo"
 ```
 
 - インベントリの選択順は `--inventory PATH` → 環境変数 `AIRONET_INVENTORY` → `~/.aironet/devices.json`。
-  `--list` は接続せず、参照先と機器名・ホスト・ユーザー名を表示する。
+  `--list` は接続せず、参照先と機器名・ホスト・ユーザー名・種別 (`wlc` / `ap`) を表示する。
 - 対象は依頼・会話の指定と `--list` を照合し、`--device NAME`（`-d`）で明示する。
   `AIRONET_DEVICE` の指定も使える。複数候補から先頭の機器を勝手に選ばない。
 - 資格情報は CLI に解決させる。パスワードの選択順は機器の `password` →
-  `password_env` が指す環境変数 → `WLC_PASS`。一覧確認のためにインベントリ全体や環境変数の値を表示しない。
+  `password_env` が指す環境変数 → `WLC_PASS`。AP の enable パスワードは `enable_password` →
+  `enable_password_env` → ログインパスワード。一覧確認のためにインベントリ全体や環境変数の値を表示しない。
   資格情報不足は必要な設定箇所を伝え、秘密値を会話やリポジトリに書かせない。
+- 種別 `ap` の機器は AP の Privileged EXEC (`#`) でコマンドを実行する。`ap-cr` のコマンドを使い、
+  `--cycle-wlan` と `--save` は使えない (接続前にエラーになる)。`reload` や `capwap ap restart` は
+  セッションが落ちるので、依頼で明示された場合だけ単独で実行する。
 
-機種・実行版は既知の情報を使い、実機調査の範囲なら `show sysinfo` で確かめる。
+機種・実行版は既知の情報を使い、実機調査の範囲なら `show sysinfo` (AP は `show version`) で確かめる。
 構文や制約が不明な場合は、ローカルの変換済みマニュアルを確認する。
 `air-manual` が利用可能ならその手順を使い、無ければ
 `AIRONET_MANUALS`（未設定なら `~/.aironet/manuals/`）の該当冊子の索引から本文を読む。

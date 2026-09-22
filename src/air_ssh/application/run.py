@@ -14,6 +14,7 @@ from ..domain import (
     Target,
     UsageError,
     entry_text,
+    resolve_kind,
     resolve_target,
     select_entry,
 )
@@ -94,12 +95,24 @@ def run(
         for name, entry in devices.items():
             host = entry_text(entry, "host", "hostname", "address", "ip") or "(no host)"
             user = entry_text(entry, "username", "user") or "(no username)"
-            print(f"{name}\t{host}\t{user}", file=out)
+            try:
+                kind = resolve_kind(entry, name)
+            except UsageError:
+                # --list shows no inventory values beyond host and user; connecting
+                # reports the bad kind in full.
+                kind = "(unknown kind)"
+            print(f"{name}\t{host}\t{user}\t{kind}", file=out)
         if not devices:
             print("No devices. Add devices to the inventory shown above.", file=out)
         return
     name, entry = select_entry(req.device, devices, env)
     target = resolve_target(name, entry, env)
+    if target.is_ap:
+        # WLAN cycles and save config exist on the controller CLI only.
+        if any(isinstance(operation, CycleWlan) for operation in req.operations):
+            raise UsageError(f"--cycle-wlan applies to controllers; {name!r} is an AP")
+        if req.save:
+            raise UsageError(f"--save applies to controllers; {name!r} is an AP")
     session = open_session(target, out, err)
     try:
         execute(req, session, err)

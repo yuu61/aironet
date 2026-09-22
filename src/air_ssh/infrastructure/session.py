@@ -34,6 +34,13 @@ ERROR_RE = re.compile(
 # 802.11a network is operational."). Only config commands are judged by it, so a
 # show dump that happens to start a line with the word cannot fail a status read.
 CONFIG_ERROR_RE = re.compile(r"^\s*Cannot\b", re.IGNORECASE | re.MULTILINE)
+# A Wave 2 / Catalyst Wi-Fi 6 AP: user EXEC "hostname>" or privileged EXEC "hostname#",
+# and the CLI error messages the AP command reference documents.
+AP_PROMPT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*[>#]")
+AP_ERROR_RE = re.compile(
+    r"^\s*%\s*(?:Ambiguous command\b|Incomplete command\b|Invalid input\b)",
+    re.IGNORECASE | re.MULTILINE,
+)
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 DEFAULT_TIMEOUT = 120
 # How long the escape key may take to bring the root prompt back after an abandoned command.
@@ -51,6 +58,13 @@ def waiting_line(tail: str) -> str:
 
 
 class NetmikoSession:
+    """AireOS WLC / Mobility Express controller CLI."""
+
+    DEVICE = "controller"
+    # What follows Netmiko's base prompt, and the fallback when there is none.
+    PROMPT_TAIL = r"\s*>"
+    FALLBACK_PROMPT = PROMPT_RE
+
     def __init__(self, conn, out: TextIO, err: TextIO):
         self._conn = conn
         self._out = out
@@ -58,14 +72,29 @@ class NetmikoSession:
         self._ready = True
         base_prompt = getattr(conn, "base_prompt", None)
         self._prompt = (
-            re.compile(re.escape(base_prompt.strip()) + r"\s*>")
+            re.compile(re.escape(base_prompt.strip()) + self.PROMPT_TAIL)
             if isinstance(base_prompt, str) and base_prompt.strip()
-            else PROMPT_RE
+            else self.FALLBACK_PROMPT
         )
 
     def run(self, command: str, timeout: int = DEFAULT_TIMEOUT) -> bool:
         """Stream a command. Timeout is inactivity, not total runtime."""
         return self._exchange(command, timeout) is not None
+
+    def _rejected(self, command: str, output: str) -> bool:
+        is_config = command.split()[0].lower() == "config"
+        return bool(ERROR_RE.search(output) or (is_config and CONFIG_ERROR_RE.search(output)))
+
+    def _answer(self, command: str, line: str) -> str | None:
+        """What to type at a complete waiting line, or None to keep waiting."""
+        if ENTER_RE.fullmatch(line):
+            return "\n"
+        if MORE_RE.fullmatch(line):
+            return " "
+        confirm = SAVE_CONFIRM_RE if command.strip().lower() == "save config" else CONFIRM_RE
+        if confirm.fullmatch(line):
+            return "y\n"
+        return None
 
     def _exchange(self, command: str, timeout: int = DEFAULT_TIMEOUT) -> str | None:
         if not self._ready:
@@ -89,15 +118,7 @@ class NetmikoSession:
             # Only answer a complete waiting line, never a substring in normal output
             # or a command echo. A quiet read lets fragmented lines finish first.
             line = waiting_line(tail)
-            confirm = SAVE_CONFIRM_RE if command.strip().lower() == "save config" else CONFIRM_RE
-            response = None
-            is_echo = line == command.strip()
-            if not is_echo and ENTER_RE.fullmatch(line):
-                response = "\n"
-            elif not is_echo and MORE_RE.fullmatch(line):
-                response = " "
-            elif not is_echo and confirm.fullmatch(line):
-                response = "y\n"
+            response = None if line == command.strip() else self._answer(command, line)
             if response is not None:
                 self._conn.write_channel(response)
                 tail = ""
@@ -112,9 +133,8 @@ class NetmikoSession:
                     output = "\n".join(
                         row for row in output.splitlines() if row.strip() != command.strip()
                     )
-                    is_config = command.split()[0].lower() == "config"
-                    if ERROR_RE.search(output) or (is_config and CONFIG_ERROR_RE.search(output)):
-                        raise OperationError(f"controller rejected '{command}'")
+                    if self._rejected(command, output):
+                        raise OperationError(f"{self.DEVICE} rejected '{command}'")
                     return output
                 prompt_pending = True
             elif time.monotonic() - last_data > timeout:
@@ -183,6 +203,32 @@ class NetmikoSession:
         self._conn.disconnect()
 
 
+class ApSession(NetmikoSession):
+    """A Wave 2 / Catalyst Wi-Fi 6 AP's own CLI, in privileged EXEC.
+
+    Netmiko's IOS handling has already set "terminal length 0", so nothing pauses,
+    and the AP command reference documents no questions to answer: an unexpected
+    prompt is left to the inactivity timeout and Ctrl-Z. WLAN cycles and
+    "save config" belong to the controller CLI and are refused.
+    """
+
+    DEVICE = "AP"
+    PROMPT_TAIL = r"[>#]"
+    FALLBACK_PROMPT = AP_PROMPT_RE
+
+    def _rejected(self, command: str, output: str) -> bool:
+        return AP_ERROR_RE.search(output) is not None
+
+    def _answer(self, command: str, line: str) -> str | None:
+        return None
+
+    def save(self) -> None:
+        raise UsageError("--save applies to controllers; the AP CLI has no save config")
+
+    def wlan_enabled(self, wlan_id: str) -> bool:
+        raise UsageError("--cycle-wlan applies to controllers; the AP CLI has no WLANs")
+
+
 def open_session(target: Target, out: TextIO, err: TextIO) -> NetmikoSession:
     # Help and inventory listing do not require Netmiko.
     try:
@@ -190,38 +236,29 @@ def open_session(target: Target, out: TextIO, err: TextIO) -> NetmikoSession:
         from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
     except ImportError:
         raise UsageError(f"netmiko is not installed for {sys.executable}; run uv sync") from None
+    options = {
+        "host": target.host,
+        "port": target.port,
+        "username": target.username,
+        "password": target.password,
+        "fast_cli": False,
+    }
+    if target.is_ap:
+        options |= {"device_type": "cisco_ios", "secret": target.enable_password}
+    else:
+        options["device_type"] = "cisco_wlc_ssh"
     try:
-        conn = ConnectHandler(
-            device_type="cisco_wlc_ssh",
-            host=target.host,
-            port=target.port,
-            username=target.username,
-            password=target.password,
-            fast_cli=False,
-        )
+        conn = ConnectHandler(**options)
     except (NetmikoAuthenticationException, NetmikoTimeoutException, OSError) as exc:
         raise OperationError(
             f"SSH connection to {target.name!r} failed ({type(exc).__name__})"
         ) from None
-    session = NetmikoSession(conn, out, err)
+    session = ApSession(conn, out, err) if target.is_ap else NetmikoSession(conn, out, err)
     try:
-        # Netmiko disables paging during login. Cisco warns that large unpaged
-        # output can terminate the session; handle MORE explicitly instead.
-        try:
-            enabled = session.run("config paging enable")
-        except OperationError:
-            # config paging needs read-write privileges. For a read-only user Netmiko's
-            # "config paging disable" was refused the same way, so paging is still on
-            # and MORE handling suffices; the warning covers the remaining case.
-            print(
-                "[WARN] controller refused 'config paging enable' (read-write privileges "
-                "required); continuing. If this account is read-write, paging is off and "
-                "a very long output may end the session.",
-                file=err,
-            )
+        if target.is_ap:
+            _enter_privileged_exec(conn, target, NetmikoTimeoutException)
         else:
-            if not enabled:
-                raise OperationError("could not enable CLI paging")
+            _enable_paging(session, err)
     except BaseException:
         try:
             session.close()
@@ -229,3 +266,34 @@ def open_session(target: Target, out: TextIO, err: TextIO) -> NetmikoSession:
             print(f"[WARN] disconnect after initialization failure failed: {exc}", file=err)
         raise
     return session
+
+
+def _enter_privileged_exec(conn, target: Target, timeout_error: type) -> None:
+    # The AP starts in user EXEC (">"); "enable" asks for the secret. Netmiko reports
+    # a wrong or missing secret as ValueError, which must not leak past the CLI.
+    try:
+        conn.enable()
+    except (ValueError, timeout_error, OSError):
+        raise OperationError(
+            f"could not enter privileged EXEC on {target.name!r}; check enable_password"
+        ) from None
+
+
+def _enable_paging(session: NetmikoSession, err: TextIO) -> None:
+    # Netmiko disables paging during login. Cisco warns that large unpaged
+    # output can terminate the session; handle MORE explicitly instead.
+    try:
+        enabled = session.run("config paging enable")
+    except OperationError:
+        # config paging needs read-write privileges. For a read-only user Netmiko's
+        # "config paging disable" was refused the same way, so paging is still on
+        # and MORE handling suffices; the warning covers the remaining case.
+        print(
+            "[WARN] controller refused 'config paging enable' (read-write privileges "
+            "required); continuing. If this account is read-write, paging is off and "
+            "a very long output may end the session.",
+            file=err,
+        )
+        return
+    if not enabled:
+        raise OperationError("could not enable CLI paging")

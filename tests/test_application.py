@@ -299,8 +299,79 @@ class ExecutionTests(unittest.TestCase):
                 out=out,
                 open_session=lambda *args: self.fail("unexpected connection"),
             )
-            self.assertIn("lab\t192.0.2.1\toperator", out.getvalue())
+            self.assertIn("lab\t192.0.2.1\toperator\twlc", out.getvalue())
             self.assertNotIn("test-secret", out.getvalue())
+
+    def test_ap_target_refuses_controller_only_options_before_connecting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "devices.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "ap1": {
+                            "kind": "ap",
+                            "host": "192.0.2.17",
+                            "username": "admin",
+                            "password": "test-secret",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for request in (
+                Request((CycleWlan("1"), Command("show version")), "ap1", str(path)),
+                Request((Command("show version"),), "ap1", str(path), save=True),
+            ):
+                with self.subTest(request=request), self.assertRaisesRegex(UsageError, "AP"):
+                    run(
+                        request,
+                        env={},
+                        open_session=lambda *args: self.fail("unexpected connection"),
+                    )
+            # Plain commands reach the AP session with the kind resolved.
+            session = FakeSession()
+            targets = []
+
+            def connect(target, out, err):
+                targets.append(target)
+                return session
+
+            out = io.StringIO()
+            run(
+                Request((Command("show version"),), "ap1", str(path)),
+                env={},
+                out=out,
+                open_session=connect,
+            )
+            self.assertTrue(targets[0].is_ap)
+            self.assertEqual(targets[0].enable_password, "test-secret")
+            self.assertEqual(session.calls, ["show version", "close"])
+            run(
+                Request(inventory=str(path), list_devices=True),
+                env={},
+                out=out,
+                open_session=lambda *args: self.fail("unexpected connection"),
+            )
+            self.assertIn("ap1\t192.0.2.17\tadmin\tap", out.getvalue())
+
+    def test_list_does_not_show_a_bad_kind_value(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "devices.json"
+            path.write_text(
+                json.dumps(
+                    {"odd": {"host": "192.0.2.1", "user": "operator", "kind": "typo-value"}}
+                ),
+                encoding="utf-8",
+            )
+            out = io.StringIO()
+            run(
+                Request(inventory=str(path), list_devices=True),
+                env={},
+                out=out,
+                open_session=lambda *args: self.fail("unexpected connection"),
+            )
+            self.assertIn("odd\t192.0.2.1\toperator\t(unknown kind)", out.getvalue())
+            self.assertNotIn("typo-value", out.getvalue())
 
     def test_missing_password_never_opens_session(self):
         with tempfile.TemporaryDirectory() as directory:

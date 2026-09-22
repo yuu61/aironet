@@ -52,6 +52,35 @@ class InventoryTests(unittest.TestCase):
         )
         self.assertNotIn("test-secret", repr(target))
 
+    def test_kind_defaults_to_controller_and_me_is_an_alias(self):
+        valid = {"host": "192.0.2.1", "username": "operator", "password": "test-secret"}
+        self.assertEqual(resolve_target("lab", valid, {}).kind, "wlc")
+        self.assertEqual(resolve_target("lab", {**valid, "kind": "ME"}, {}).kind, "wlc")
+        self.assertIsNone(resolve_target("lab", {**valid, "kind": "me"}, {}).enable_password)
+        self.assertTrue(resolve_target("ap", {**valid, "kind": "ap"}, {}).is_ap)
+        self.assertEqual(resolve_target("lab", {**valid, "kind": ""}, {}).kind, "wlc")
+        for kind in ("ios", 3):
+            with self.subTest(kind=kind), self.assertRaises(UsageError):
+                resolve_target("lab", {**valid, "kind": kind}, {})
+
+    def test_ap_enable_secret_precedence_and_hidden(self):
+        valid = {"kind": "ap", "host": "192.0.2.1", "username": "admin", "password": "login-secret"}
+        env = {"AP_ENABLE": "env-secret"}
+        for entry, expected in (
+            (
+                {**valid, "enable_password": "file-secret", "enable_password_env": "AP_ENABLE"},
+                "file-secret",
+            ),
+            ({**valid, "enable_secret": "file-secret"}, "file-secret"),
+            ({**valid, "enable_password_env": "AP_ENABLE"}, "env-secret"),
+            ({**valid, "enable_password_env": "MISSING"}, "login-secret"),
+            (valid, "login-secret"),
+        ):
+            with self.subTest(entry=entry):
+                target = resolve_target("ap", entry, env)
+                self.assertEqual(target.enable_password, expected)
+                self.assertNotIn(expected, repr(target))
+
     def test_invalid_fields_fail_before_connecting(self):
         valid = {"host": "192.0.2.1", "username": "operator", "password": "test-secret"}
         for field, value in (

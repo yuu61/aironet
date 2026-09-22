@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from air_ssh.domain import OperationError, Target, UsageError
 from air_ssh.infrastructure.inventory import inventory_path, read_inventory
-from air_ssh.infrastructure.session import NetmikoSession, open_session
+from air_ssh.infrastructure.session import ApSession, NetmikoSession, open_session
 
 
 class InventoryFileTests(unittest.TestCase):
@@ -461,3 +461,119 @@ class SessionTests(unittest.TestCase):
             ]
         )
         self.assertTrue(NetmikoSession(channel, io.StringIO(), io.StringIO()).wlan_enabled("1"))
+
+
+class ApChannel(Channel):
+    base_prompt = "ap-153-4"
+
+
+class ApSessionTests(unittest.TestCase):
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_privileged_prompt_ends_output_and_controller_prompt_does_not(self, sleep):
+        channel = ApChannel(
+            [
+                "show version\n",
+                "(Cisco Controller) >\n",  # a line of output, not this device's prompt
+                "AP Running Image : 8.10.185.0\n",
+                "ap-153-4#",
+                "",
+                "",
+            ]
+        )
+        out = io.StringIO()
+        self.assertTrue(ApSession(channel, out, io.StringIO()).run("show version"))
+        self.assertIn("8.10.185.0", out.getvalue())
+        self.assertEqual(channel.writes, ["show version\n"])
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_documented_ap_errors_are_failures(self, sleep):
+        for error in (
+            "% Incomplete command.",
+            '% Ambiguous command: "show con"',
+            "% Invalid input detected at '^' marker.",
+        ):
+            with self.subTest(error=error):
+                channel = ApChannel(["ex\n", error + "\n", "ap-153-4#", "", ""])
+                with self.assertRaisesRegex(OperationError, "AP rejected"):
+                    ApSession(channel, io.StringIO(), io.StringIO()).run("ex")
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_controller_error_words_do_not_fail_ap_output(self, sleep):
+        channel = ApChannel(
+            [
+                "show logging\n",
+                "Error: link down\nUnable to reach controller\n",
+                "ap-153-4#",
+                "",
+                "",
+            ]
+        )
+        self.assertTrue(ApSession(channel, io.StringIO(), io.StringIO()).run("show logging"))
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_ap_never_answers_controller_style_questions(self, sleep):
+        # Nothing is documented for the AP; an unexpected question waits, then Ctrl-Z.
+        channel = ApChannel(["Are you sure you want to continue? (y/n)", "", "\nap-153-4#", "", ""])
+        with patch(
+            "air_ssh.infrastructure.session.time.monotonic", side_effect=[0, 0, 121, 121, 121]
+        ):
+            self.assertFalse(ApSession(channel, io.StringIO(), io.StringIO()).run("reload"))
+        self.assertEqual(channel.writes, ["reload\n", "\x1a"])
+
+    @patch("air_ssh.infrastructure.session.time.sleep")
+    def test_fallback_prompt_without_base_prompt(self, sleep):
+        channel = Channel(["show version\nUptime : 1 day\n", "cisco-wave2-ap#", "", ""])
+        self.assertTrue(ApSession(channel, io.StringIO(), io.StringIO()).run("show version"))
+        for line in ("(Cisco Controller) >", "-> next#", "a b#", "#"):
+            self.assertIsNone(ApSession.FALLBACK_PROMPT.fullmatch(line), line)
+
+    def test_controller_only_operations_are_refused(self):
+        session = ApSession(ApChannel([]), io.StringIO(), io.StringIO())
+        with self.assertRaises(UsageError):
+            session.wlan_enabled("1")
+        with self.assertRaises(UsageError):
+            session.save()
+
+    @patch("netmiko.ConnectHandler")
+    def test_ap_connection_enters_privileged_exec_without_paging_commands(self, connect):
+        connect.return_value.read_channel.return_value = ""
+        session = open_session(
+            Target("ap1", "192.0.2.17", "admin", "test-secret", kind="ap", enable_password="en"),
+            io.StringIO(),
+            io.StringIO(),
+        )
+        connect.assert_called_once_with(
+            device_type="cisco_ios",
+            host="192.0.2.17",
+            port=22,
+            username="admin",
+            password="test-secret",
+            fast_cli=False,
+            secret="en",
+        )
+        self.assertIsInstance(session, ApSession)
+        connect.return_value.enable.assert_called_once_with()
+        connect.return_value.write_channel.assert_not_called()
+        session.close()
+        connect.return_value.disconnect.assert_called_once()
+
+    @patch("netmiko.ConnectHandler")
+    def test_wrong_enable_secret_is_reported_without_the_secret(self, connect):
+        connect.return_value.enable.side_effect = ValueError("Failed to enter enable mode")
+        with self.assertRaises(OperationError) as raised:
+            open_session(
+                Target(
+                    "ap1",
+                    "192.0.2.17",
+                    "admin",
+                    "login-secret",
+                    kind="ap",
+                    enable_password="en-secret",
+                ),
+                io.StringIO(),
+                io.StringIO(),
+            )
+        self.assertIn("enable_password", str(raised.exception))
+        self.assertNotIn("en-secret", str(raised.exception))
+        self.assertNotIn("login-secret", str(raised.exception))
+        connect.return_value.disconnect.assert_called_once()

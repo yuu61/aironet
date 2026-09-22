@@ -2,7 +2,7 @@
 
 Cisco AireOS WLC / Mobility Express を扱うための道具立て。
 
-## air-ssh — WLC の SSH 操作
+## air-ssh — WLC / AP の SSH 操作
 
 Python 3.10 以降と uv を使う。
 
@@ -13,6 +13,7 @@ $ air-ssh --device wlc "show sysinfo"
 $ air-ssh --device wlc "show ap summary" "show client summary"
 $ air-ssh --device wlc --cycle-wlan 1 "config wlan max-associated-clients 50 1" --save
 $ air-ssh --device wlc --save
+$ air-ssh --device ap1 "show version" "show capwap client rcb"
 ```
 
 接続情報は `~/.aironet/devices.json` に置く。リポジトリには入れない。
@@ -26,13 +27,27 @@ $ air-ssh --device wlc --save
       "username": "admin",
       "password": "YOUR_PASSWORD",
       "port": 22
+    },
+    "ap1": {
+      "kind": "ap",
+      "host": "192.0.2.17",
+      "username": "admin",
+      "password": "YOUR_PASSWORD",
+      "enable_password": "YOUR_ENABLE_SECRET"
     }
   }
 }
 ```
 
 - ファイルの選択順は `--inventory PATH` → `$AIRONET_INVENTORY` → `~/.aironet/devices.json`。
-  `--list` は参照先と機器名・ホスト・ユーザー名を表示し、パスワードは表示しない。
+  `--list` は参照先と機器名・ホスト・ユーザー名・種別を表示し、パスワードは表示しない。
+- `kind` は `wlc` (既定。`me` も同じ扱い) か `ap`。`ap` は Wave 2 / Catalyst Wi-Fi 6 AP 自身の
+  CLI で、ログイン後に `enable` で Privileged EXEC (`#`) に入ってからコマンドを送る。
+  enable のパスワードは `enable_password` (`enable_secret` も可) → `enable_password_env` が指す
+  環境変数 → ログインパスワードの順。AP では netmiko が `terminal length 0` を設定するので
+  ページ送りは無く、エラーは AP コマンドリファレンス記載の `% Incomplete command.` /
+  `% Ambiguous command` / `% Invalid input detected` で判定する。`--cycle-wlan` と `--save` は
+  コントローラー専用で、AP を相手にすると接続前にエラーになる。
 - 機器は `--device NAME` (短縮形 `-d`) または `$AIRONET_DEVICE` で明示する。
   ソースコードに固定の接続先や認証情報は持たない。
 - ix-toolkit と同様、`devices` で包まない `{ "wlc": { ... } }` 形式も使える。
