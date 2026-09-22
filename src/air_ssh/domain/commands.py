@@ -19,8 +19,15 @@ class CycleWlan:
     wlan_id: str
 
     def __post_init__(self):
-        if not self.wlan_id.isascii() or not self.wlan_id.isdecimal() or int(self.wlan_id) < 1:
-            raise UsageError("--cycle-wlan requires a positive WLAN id")
+        normalized = self.wlan_id.lstrip("0")
+        if (
+            not normalized.isascii()
+            or not normalized.isdecimal()
+            or len(normalized) > 3
+            or not 1 <= int(normalized) <= 512
+        ):
+            raise UsageError("--cycle-wlan requires a WLAN id in 1..512")
+        object.__setattr__(self, "wlan_id", normalized)
 
     @property
     def disable(self) -> str:

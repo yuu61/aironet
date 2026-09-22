@@ -12,8 +12,9 @@ def parse_args(argv: list[str]) -> Request:
         usage="%(prog)s [options] [--cycle-wlan ID] [COMMAND ...]",
         description="Cisco AireOS WLC / Mobility Express SSH helper.",
         epilog=(
-            "--cycle-wlan ID disables a WLAN before the following commands; "
-            "the next cycle or end of the batch restores it, including on errors. "
+            "--cycle-wlan ID (1..512) disables a WLAN before the following commands; "
+            "the next cycle or end of the batch restores and verifies its original state. "
+            "Errors stop the batch; restoration is attempted if the session is usable. "
             'Example: air-ssh -d wlc --cycle-wlan 1 "config wlan max-associated-clients 50 1"'
         ),
         allow_abbrev=False,

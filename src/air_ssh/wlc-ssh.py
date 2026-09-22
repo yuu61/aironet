@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: N999 -- retain the compatibility script's existing filename
 """Compatibility entry point; prefer the installed air-ssh command."""
 
 import sys

@@ -61,6 +61,11 @@ class InventoryTests(unittest.TestCase):
                 resolve_target("lab", {**valid, field: value}, {})
 
     def test_wlan_id_cannot_inject_commands(self):
-        for value in ("", "0", "-1", "1\nsave config", "1 extra", "１"):
+        for value in ("", "0", "-1", "513", "9" * 5000, "1\nsave config", "1 extra", "１"):
             with self.subTest(value=value), self.assertRaises(UsageError):
                 CycleWlan(value)
+
+    def test_wlan_id_boundaries_and_normalization(self):
+        self.assertEqual(CycleWlan("1").disable, "config wlan disable 1")
+        self.assertEqual(CycleWlan("512").enable, "config wlan enable 512")
+        self.assertEqual(CycleWlan("0001").wlan_id, "1")
